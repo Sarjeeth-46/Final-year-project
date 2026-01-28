@@ -8,3 +8,6 @@ imbalanced-learn
 pytest
 httpx
 pytest-asyncio
+passlib[bcrypt]
+pyjwt
+python-multipart

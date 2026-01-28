@@ -59,9 +59,10 @@ body {
 }
 
 .app-container {
-  max-width: 1400px;
-  margin: 0 auto;
-  padding: 20px;
+  max-width: 100%;
+  margin: 0;
+  padding: 20px 40px;
+  /* More horizontal padding for ultra-wide feel */
 }
 
 .header {
@@ -105,9 +106,10 @@ body {
   gap: 20px;
 }
 
-@media (min-width: 1024px) {
+@media (min-width: 1400px) {
   .dashboard-grid {
-    grid-template-columns: 1fr 1fr;
+    grid-template-columns: 3fr 2fr;
+    /* Charts take more space */
   }
 
   .feed-card {
@@ -290,9 +292,9 @@ tr:hover {
 }
 
 .chart-wrapper {
-  flex: 1;
-  min-width: 300px;
-  height: 320px;
+  flex: 1 1 300px;
+  /* Grow, shrink, base of 300px */
+  height: 350px;
   /* Increased height to prevent overlap */
   background: rgba(255, 255, 255, 0.01);
   border: 1px solid var(--border);
@@ -530,4 +532,177 @@ tr:hover {
 .action-btn:hover {
   transform: translateY(-1px);
   background: rgba(255, 255, 255, 0.05);
+}
+
+/* Notification Center */
+.notification-container {
+  position: relative;
+}
+
+.notification-bell {
+  background: none;
+  border: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+  position: relative;
+  padding: 8px;
+  border-radius: 50%;
+  transition: all 0.2s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.notification-bell:hover,
+.notification-bell.active {
+  background: rgba(255, 255, 255, 0.1);
+  color: var(--text-primary);
+}
+
+.notification-badge {
+  position: absolute;
+  top: 0;
+  right: 0;
+  background: var(--critical);
+  color: white;
+  font-size: 0.65rem;
+  font-weight: 700;
+  min-width: 16px;
+  height: 16px;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 2px solid var(--card-bg);
+}
+
+.notification-dropdown {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  margin-top: 10px;
+  width: 380px;
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
+  z-index: 100;
+  overflow: hidden;
+  animation: slideDown 0.2s ease-out;
+}
+
+@keyframes slideDown {
+  from {
+    opacity: 0;
+    transform: translateY(-10px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.notification-header {
+  padding: 16px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  background: rgba(0, 0, 0, 0.2);
+}
+
+.notification-header h3 {
+  margin: 0;
+  font-size: 0.95rem;
+  color: var(--text-primary);
+}
+
+.notification-count {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  background: rgba(255, 255, 255, 0.05);
+  padding: 2px 8px;
+  border-radius: 10px;
+}
+
+.notification-list {
+  max-height: 400px;
+  overflow-y: auto;
+}
+
+.empty-state {
+  padding: 40px;
+  text-align: center;
+  color: var(--text-secondary);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+}
+
+.notification-item {
+  padding: 16px;
+  border-bottom: 1px solid var(--border-subtle);
+  display: flex;
+  gap: 12px;
+  transition: background 0.2s;
+  cursor: default;
+}
+
+.notification-item:hover {
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.notification-item.critical {
+  border-left: 3px solid var(--critical);
+  background: linear-gradient(to right, rgba(244, 63, 94, 0.05), transparent);
+}
+
+.notif-icon {
+  margin-top: 2px;
+}
+
+.notif-content {
+  flex: 1;
+}
+
+.notif-top {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 4px;
+}
+
+.notif-title {
+  font-weight: 600;
+  color: var(--text-primary);
+  font-size: 0.9rem;
+}
+
+.notif-time {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+}
+
+.notif-msg {
+  margin: 0 0 10px 0;
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+}
+
+.resolve-btn-text {
+  background: none;
+  border: none;
+  color: var(--accent);
+  font-size: 0.8rem;
+  font-weight: 500;
+  padding: 0;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.resolve-btn-text:hover {
+  text-decoration: underline;
 }

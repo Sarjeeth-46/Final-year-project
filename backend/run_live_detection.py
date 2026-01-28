@@ -1,127 +1,217 @@
+"""
+Project: AegisCore
+Module: Network Sentinel (Live Monitor)
+Description:
+    The persistent surveillance loop that orchestrates the flow of synthetic
+    telemetry through the inference engine and persists actionable intelligence
+    to the data layer.
+
+    Optimization:
+    - Loads Model ONCE at startup (Singleton).
+    - Batches DB writes for efficiency.
+"""
+
 from pymongo import MongoClient
-from pymongo.errors import ServerSelectionTimeoutError
 import pandas as pd
 import joblib
 import time
 import uuid
-from log_generator import generate_log_entry
-from detector import calculate_risk_score
 import os
 import json
+import logging
 from dotenv import load_dotenv
+
+# Internal Modules
+# Internal Modules
+try:
+    from backend.log_generator import _synthesizer, generate_log_entry
+    from backend.detector import TrafficClassifier, RiskAssessmentEngine, calculate_risk_score
+except ImportError:
+    # Fallback for direct execution where 'backend' package isn't resolved
+    from log_generator import _synthesizer, generate_log_entry
+    from detector import TrafficClassifier, RiskAssessmentEngine, calculate_risk_score
 
 load_dotenv()
 
-MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017")
-DB_NAME = "threat_detection"
-COLLECTION_NAME = "threats"
-JSON_DB_PATH = "threats.json"
-MODEL_PATH = "model_real.pkl"
+# Logger Configuration
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - [Sentinel] - %(message)s')
+logger = logging.getLogger("NetworkSentinel")
 
-def run_detection(num_records=50):
-    print("Initializing Live Detection Simulation...")
+class SentinelConfig:
+    MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017")
+    DB_NAME = "threat_detection"
+    COLLECTION_NAME = "threats"
     
-    # Load Real Model
-    try:
-        model = joblib.load(MODEL_PATH)
-        print(f"Loaded {MODEL_PATH}")
-    except Exception as e:
-        print(f"Error loading model: {e}")
-        return
+    # Base Directory Resolution (Robust against CWD)
+    _BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+    
+    # Fallback storage for disconnected environments
+    LOCAL_STORAGE_PATH = os.path.join(_BASE_DIR, "threats.json")
+    MODEL_PATH = os.path.join(_BASE_DIR, "model_real.pkl")
 
-    # Database Setup
-    mongo_available = False
-    try:
-        client = MongoClient(MONGO_URI, serverSelectionTimeoutMS=2000)
-        client.server_info()
-        db = client[DB_NAME]
-        collection = db[COLLECTION_NAME]
-        mongo_available = True
-    except:
-        print("MongoDB unavailable. Using local JSON.")
-
-    print(f"Processing {num_records} live traffic events...")
+class IntelligencePersistence:
+    """Handles data storage abstraction (MongoDB + Local Fallback)."""
     
-    threats_to_insert = []
-    ip_alert_counts = {} # Trace repeat offenders in this batch/session
-    
-    for _ in range(num_records):
-        log = generate_log_entry()
+    def __init__(self):
+        self.mongo_client = None
+        self.collection = None
+        self._connect_db()
         
-        # Prepare Input for Model: ['dest_port', 'packet_size']
-        input_data = pd.DataFrame([{
-            'dest_port': log['dest_port'],
-            'packet_size': log['packet_size']
-        }])
-        
-        # Predict
+    def _connect_db(self):
         try:
-            probs = model.predict_proba(input_data)[0]
-            classes = model.classes_
-            prediction = model.predict(input_data)[0]
-            class_idx = list(classes).index(prediction)
-            confidence = probs[class_idx]
-            
-            # Risk Calc
-            risk = calculate_risk_score(confidence, prediction)
-            
-            if prediction != 'Normal':
-                # Temporal Analysis: Check for Repeat Offender
-                src = log['source_ip']
-                ip_alert_counts[src] = ip_alert_counts.get(src, 0) + 1
-                
-                escalation_flag = False
-                if ip_alert_counts[src] > 1: # Low threshold for demo (usually > 5)
-                    risk = min(risk * 1.2, 100.0) # Escalate Risk
-                    escalation_flag = True
-                    print(f"ESCALATION: Repeat offender {src} detected! Risk bumped to {risk}")
+            self.mongo_client = MongoClient(SentinelConfig.MONGO_URI, serverSelectionTimeoutMS=2000)
+            self.mongo_client.server_info() # Trigger connection check
+            self.collection = self.mongo_client[SentinelConfig.DB_NAME][SentinelConfig.COLLECTION_NAME]
+            logger.info("Connected to Intelligence Database (MongoDB).")
+        except Exception:
+            logger.warning("Primary Database Unavailable. Operating in Disconnected Mode (JSON Fallback).")
 
-                print(f"DETECTED: {prediction} from {src} (Risk: {risk})")
-                
-                threat = {
-                    "id": str(uuid.uuid4()),
-                    "timestamp": log['timestamp'],
-                    "source_ip": log['source_ip'],
-                    "destination_ip": log['dest_ip'],
-                    "destination_port": log['dest_port'],
-                    "protocol": log['protocol'],
-                    "packet_size": log['packet_size'],
-                    "predicted_label": prediction,
-                    "confidence": float(confidence),
-                    "risk_score": risk,
-                    "status": "Active",
-                    "escalation_flag": escalation_flag
-                }
-                threats_to_insert.append(threat)
-                
-        except Exception as e:
-            print(f"Prediction error: {e}")
+    def persist_batch(self, events: list):
+        if not events:
+            return
 
-    # Save to Storage
-    if threats_to_insert:
-        if mongo_available:
-            collection.insert_many(threats_to_insert)
-            
-        # Update JSON for Frontend Fallback
-        current_data = []
-        if os.path.exists(JSON_DB_PATH):
+        # 1. Primary Storage
+        if self.collection is not None:
             try:
-                with open(JSON_DB_PATH, 'r') as f:
-                    current_data = json.load(f)
-            except:
-                pass
+                self.collection.insert_many(events)
+            except Exception as e:
+                logger.error(f"DB Write Failed: {e}")
+
+        # 2. Local Fallback (for UI polling compatibility)
+        self._update_local_cache(events)
+
+    def _update_local_cache(self, new_events: list):
+        """Maintains the rolling window of recent events for the lightweight frontend."""
+        current_cache = []
+        if os.path.exists(SentinelConfig.LOCAL_STORAGE_PATH):
+            try:
+                with open(SentinelConfig.LOCAL_STORAGE_PATH, 'r') as f:
+                    current_cache = json.load(f)
+            except Exception:
+                pass # Corrupt or empty file
+
+        # Merge Strategy: Newest First
+        # Prepend new events
+        updated_cache = new_events + current_cache
+        # Retention Policy: Keep last 200 items to prevent IO starvation
+        updated_cache = updated_cache[:200]
+
+        # Serialization Fix: Ensure ObjectId is converted to string
+        def json_serial(obj):
+            """JSON serializer for objects not serializable by default json code"""
+            from bson import ObjectId
+            if isinstance(obj, ObjectId):
+                return str(obj)
+            return str(obj)
+
+        try:
+            with open(SentinelConfig.LOCAL_STORAGE_PATH, 'w') as f:
+                json.dump(updated_cache, f, indent=2, default=json_serial)
+        except Exception as e:
+            logger.error(f"Local Cache Update Failed: {e}")
+
+
+class NetworkSentinel:
+    """
+    The Active Monitoring Agent.
+    """
+    def __init__(self):
+        self.model = self._load_inference_model()
+        self.persistence = IntelligencePersistence()
+        self.offender_history = {} # In-memory state for temporal correlation
+
+    def _load_inference_model(self):
+        """Loads the predictive model into memory."""
+        try:
+            logger.info(f"Loading Inference Model from {SentinelConfig.MODEL_PATH}...")
+            # P0 Optimization: Load once, reuse forever
+            return joblib.load(SentinelConfig.MODEL_PATH)
+        except Exception as e:
+            logger.critical(f"FATAL: Model Loading Failed - {e}")
+            return None
+
+    def analyze_traffic_burst(self, sample_size: int = 50):
+        if self.model is None:
+            return
+
+        logger.info(f"Analyzing burst of {sample_size} telemetry frames...")
         
-        # Prepend new threats (latest first)
-        current_data = threats_to_insert + current_data
-        # Keep manageable size
-        current_data = current_data[:200]
+        detected_incidents = []
         
-        with open(JSON_DB_PATH, 'w') as f:
-            json.dump(current_data, f, indent=2)
+        for _ in range(sample_size):
+            # 1. Synthesize Telemetry
+            # Using the new class-based Synthesizer via the legacy adapter or direct
+            telemetry = _synthesizer.synthesize_packet()
             
-        print(f"Successfully registered {len(threats_to_insert)} new threats.")
-    else:
-        print("No threats detected in this batch.")
+            # 2. Vectorize for Model
+            # Creates raw dataframe first
+            raw_frame = pd.DataFrame([{
+                'dest_port': telemetry['dest_port'],
+                'packet_size': telemetry['packet_size']
+            }])
+            
+            # Use Domain Classifier to ensure Feature Completeness (Injects 0.0 for missing cols like flow_duration)
+            input_vector = TrafficClassifier.vectorize_payload(raw_frame)
+
+            try:
+                # 3. Inference
+                probs = self.model.predict_proba(input_vector)[0]
+                classes = self.model.classes_
+                predicted_label = self.model.predict(input_vector)[0]
+                
+                # Get confidence score for the predicted class
+                class_index = list(classes).index(predicted_label)
+                confidence = probs[class_index]
+
+                # 4. Assessment
+                severity_index = RiskAssessmentEngine.compute_severity_index(confidence, predicted_label)
+
+                if predicted_label != 'Normal':
+                    # 5. Temporal Analysis (Repeat Offender Check)
+                    src_ip = telemetry['source_ip']
+                    self.offender_history[src_ip] = self.offender_history.get(src_ip, 0) + 1
+                    
+                    escalation_flag = False
+                    if self.offender_history[src_ip] > 1:
+                        # Escalate severity for persistent threats
+                        severity_index = min(severity_index * 1.2, 100.0)
+                        escalation_flag = True
+                        logger.warning(f"ESCALATION: Repeat offender {src_ip} detected! Risk bumped to {severity_index}")
+
+                    logger.info(f"THREAT DETECTED: {predicted_label} from {src_ip} (Severity: {severity_index})")
+
+                    # 6. Incident Creation
+                    incident_record = {
+                        "id": str(uuid.uuid4()),
+                        "timestamp": telemetry['timestamp'],
+                        "source_ip": telemetry['source_ip'],
+                        "destination_ip": telemetry['dest_ip'],
+                        "destination_port": telemetry['dest_port'],
+                        "protocol": telemetry['protocol'],
+                        "packet_size": telemetry['packet_size'],
+                        "predicted_label": predicted_label,
+                        "confidence": float(confidence),
+                        "risk_score": severity_index, # API Expects 'risk_score'
+                        "status": "Active",
+                        "escalation_flag": escalation_flag
+                    }
+                    detected_incidents.append(incident_record)
+            
+            except Exception as e:
+                logger.error(f"Inference Cycle Error: {e}")
+
+        # 7. Batch Persistence
+        if detected_incidents:
+            self.persistence.persist_batch(detected_incidents)
+            logger.info(f"Registered {len(detected_incidents)} new security incidents.")
+        else:
+            logger.info("Traffic burst analysis complete. No threats detected.")
+
+
+def run_live_detection(num_records=50):
+    """Legacy Entry Point Adapter."""
+    sentinel = NetworkSentinel()
+    sentinel.analyze_traffic_burst(sample_size=num_records)
 
 if __name__ == "__main__":
-    run_detection()
+    run_live_detection()

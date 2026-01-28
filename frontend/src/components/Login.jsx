@@ -7,21 +7,16 @@ const Login = ({ onLogin }) => {
     const [isLoading, setIsLoading] = useState(false)
     const [error, setError] = useState('')
 
-    const handleSubmit = (e) => {
+    const handleSubmit = async (e) => {
         e.preventDefault()
         setError('')
         setIsLoading(true)
 
-        // Simulate network delay for better UX
-        setTimeout(() => {
-            // Hardcoded Demo Credentials
-            if (username === 'admin' && password === 'admin') {
-                onLogin()
-            } else {
-                setError('Invalid credentials. Try admin / admin')
-                setIsLoading(false)
-            }
-        }, 800)
+        const success = await onLogin(username, password)
+        if (!success) {
+            setError('Invalid credentials. Please try again.')
+            setIsLoading(false)
+        }
     }
 
     return (
